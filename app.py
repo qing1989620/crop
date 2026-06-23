@@ -3,24 +3,21 @@
 果园病虫害风险预警与防控可视化看板
 =====================================
 基于 LightGBM + SHAP 的智能预警系统
-企业级 Streamlit 可视化大屏
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
 import datetime
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from config import (
-    APP_TITLE, APP_SUBTITLE, APP_LAYOUT, AUTO_REFRESH_INTERVAL,
-    ENABLE_AUTO_REFRESH, RISK_LEVELS, BASE_CONTROL_PLANS,
-    OUTPUT_DIR, DEFAULT_DATA_PATH, CHART_COLORS, RISK_LABEL_MAP, RISK_LABEL_REVERSE
+    APP_TITLE, APP_SUBTITLE, APP_LAYOUT,
+    RISK_LEVELS, BASE_CONTROL_PLANS,
+    OUTPUT_DIR, DEFAULT_DATA_PATH, RISK_LABEL_MAP, RISK_LABEL_REVERSE
 )
 from utils.data_loader import (
     load_main_dataset, load_prevention_plan, load_response_zone_summary,
@@ -32,12 +29,12 @@ from utils.data_loader import (
 from utils.charts import (
     create_risk_pie_chart, create_risk_bar_chart, create_spatial_risk_map,
     create_time_trend_chart, create_feature_importance_chart,
-    create_shap_chart, create_kpi_gauge, create_response_zone_chart,
+    create_shap_chart, create_response_zone_chart,
     create_posi_weight_chart, create_risk_heatmap
 )
 
 
-# ==================== 页面基础配置 ====================
+# ==================== 页面配置 ====================
 st.set_page_config(
     page_title=APP_TITLE,
     page_icon="",
@@ -45,7 +42,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ==================== 专业 CSS 样式 ====================
+# ==================== CSS 样式 ====================
 st.markdown("""
 <style>
     html, body, [class*="css"] {
@@ -57,7 +54,7 @@ st.markdown("""
     }
     [data-testid="stSidebar"] * { color: #e0e4ec !important; }
     [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
-        color: #ffffff !important; font-weight: 600; letter-spacing: 0.5px;
+        color: #ffffff !important; font-weight: 600;
     }
     [data-testid="stSidebar"] button {
         background: #2e3a5c !important; color: #fff !important;
@@ -67,8 +64,11 @@ st.markdown("""
         background: #3d4f7c !important; border-color: #5a6fa8 !important;
     }
     [data-testid="stSidebar"] hr { border-color: #2e3a5c !important; }
-    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
-        color: #8e9bb4 !important; font-size: 0.85rem;
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] label {
+        color: #e0e4ec !important;
+    }
+    [data-testid="stSidebar"] .st-emotion-cache-1qg05tj {
+        color: #8e9bb4 !important; font-size: 0.82rem;
     }
 
     .app-header {
@@ -83,16 +83,20 @@ st.markdown("""
     }
 
     .status-bar {
-        display: flex; align-items: center; gap: 18px;
+        display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
         padding: 8px 16px; background: #f5f7fa; border-radius: 8px;
         margin-bottom: 16px; font-size: 0.82rem; color: #546e7a;
     }
-    .status-indicator {
+    .status-dot {
         display: inline-block; width: 8px; height: 8px; border-radius: 50%;
         background: #2ecc71; margin-right: 6px;
         box-shadow: 0 0 6px rgba(46,204,113,0.4);
     }
-    .status-sep { color: #cfd8dc; }
+    .status-dot-warn {
+        display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+        background: #f39c12; margin-right: 6px;
+        box-shadow: 0 0 6px rgba(243,156,18,0.4);
+    }
 
     .kpi-grid {
         display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;
@@ -107,16 +111,11 @@ st.markdown("""
     .kpi-value { font-size: 2rem; font-weight: 700; line-height: 1.2; }
     .kpi-label { font-size: 0.8rem; color: #7f8c8d; margin-top: 4px; font-weight: 500; }
     .kpi-sub { font-size: 0.72rem; color: #b0bec5; margin-top: 2px; }
-    .kpi-accent-low { color: #2ecc71; }
-    .kpi-accent-mid { color: #f39c12; }
-    .kpi-accent-high { color: #e74c3c; }
-    .kpi-accent-primary { color: #3498db; }
-    .kpi-accent-secondary { color: #9b59b6; }
 
     .section-title {
         font-size: 1.15rem; font-weight: 700; color: #1a1f36;
         margin: 28px 0 12px 0; padding-bottom: 8px;
-        border-bottom: 2px solid #3498db; display: inline-block; letter-spacing: 0.5px;
+        border-bottom: 2px solid #3498db; display: inline-block;
     }
 
     .advice-card {
@@ -147,89 +146,110 @@ st.markdown("""
 
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 
 # ==================== 会话状态 ====================
-if 'pipeline_ran' not in st.session_state:
-    st.session_state.pipeline_ran = False
-if 'pipeline_stats' not in st.session_state:
-    st.session_state.pipeline_stats = None
-if 'uploaded_file_path' not in st.session_state:
-    st.session_state.uploaded_file_path = None
-if 'current_data_source' not in st.session_state:
-    st.session_state.current_data_source = "default"
+for key, default in [
+    ('pipeline_done', False),
+    ('pipeline_stats', None),
+    ('uploaded_path', None),
+    ('using_uploaded', False),
+    ('pipeline_running', False),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
-    st.markdown("## Dashboard Control")
+    st.markdown("## 控制面板")
     st.markdown("---")
 
-    # 数据源
-    st.markdown("### Data Source")
-    data_source = st.radio(
-        "Select data source",
-        ["Default Sample Data", "Upload New Dataset"],
+    # ---------- 第一步：上传数据 ----------
+    st.markdown("### 第一步：选择数据源")
+
+    data_mode = st.radio(
+        "数据来源",
+        ["使用示例数据", "上传新数据集"],
         label_visibility="collapsed"
     )
 
-    if data_source == "Upload New Dataset":
+    if data_mode == "上传新数据集":
         uploaded_file = st.file_uploader(
-            "Upload CSV file",
+            "选择 CSV 文件上传",
             type=["csv"],
-            help="Required columns: 地块ID, 果树品种, 病虫害类型, 风险等级, 平均气温, 相对湿度, 降水量, 日照时数, 土壤湿度, 风速, 近7天病株数, 近7天虫口密度, 近30天用药次数",
+            help="需含以下列：地块ID, 果树品种, 病虫害类型, 风险等级, 平均气温, 相对湿度, 降水量, 日照时数, 土壤湿度, 风速, 近7天病株数, 近7天虫口密度, 近30天用药次数",
             label_visibility="collapsed"
         )
         if uploaded_file is not None:
             uploads_dir = os.path.join(BASE_DIR, "uploads")
             os.makedirs(uploads_dir, exist_ok=True)
-            tmp_path = os.path.join(uploads_dir, uploaded_file.name)
-            with open(tmp_path, "wb") as f:
+            save_path = os.path.join(uploads_dir, uploaded_file.name)
+            with open(save_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
-            st.session_state.uploaded_file_path = tmp_path
-            st.session_state.current_data_source = "uploaded"
-            st.success(f"Uploaded: {uploaded_file.name}")
+            st.session_state.uploaded_path = save_path
+            st.session_state.using_uploaded = True
+            st.session_state.pipeline_done = False
+            st.success(f"文件已上传：{uploaded_file.name}")
+            st.info("请点击下方「开始分析」按钮")
     else:
-        st.session_state.current_data_source = "default"
+        st.session_state.using_uploaded = False
+        st.caption(f"当前数据：内置示例 (300条)")
 
     st.markdown("---")
 
-    # 管线
-    st.markdown("### Pipeline")
+    # ---------- 第二步：运行分析 ----------
+    st.markdown("### 第二步：运行分析")
 
-    if st.session_state.current_data_source == "uploaded" and st.session_state.uploaded_file_path:
-        pipeline_input = st.session_state.uploaded_file_path
-        btn_label = "Run Pipeline (Uploaded Data)"
-        btn_help = f"Process {os.path.basename(pipeline_input)}"
+    # 确定管线输入
+    if st.session_state.using_uploaded and st.session_state.uploaded_path:
+        pipe_input = st.session_state.uploaded_path
+        btn_text = "开始分析（上传数据）"
     else:
-        pipeline_input = DEFAULT_DATA_PATH
-        btn_label = "Run Pipeline (Sample Data)"
-        btn_help = "Process built-in sample data"
+        pipe_input = DEFAULT_DATA_PATH
+        btn_text = "开始分析（示例数据）"
 
-    if st.button(btn_label, type="primary", width="stretch", help=btn_help):
-        with st.spinner("Running data pipeline..."):
+    if st.button(btn_text, type="primary", width="stretch"):
+        st.session_state.pipeline_running = True
+        st.session_state.pipeline_done = False
+
+    if st.session_state.pipeline_running:
+        status_placeholder = st.empty()
+        try:
+            status_placeholder.info("正在执行数据管线，请稍候...")
             from pipeline import run_pipeline
-            result = run_pipeline(pipeline_input)
-            st.session_state.pipeline_ran = True
+            result = run_pipeline(pipe_input)
             st.session_state.pipeline_stats = result
-            if result['success']:
-                st.success(f"Pipeline completed ({result['stats'].get('elapsed', 'N/A')})")
-                st.cache_data.clear()
-            else:
-                st.error(f"Pipeline failed: {result['message']}")
+            st.session_state.pipeline_running = False
 
-    if st.session_state.pipeline_ran and st.session_state.pipeline_stats:
+            if result['success']:
+                st.session_state.pipeline_done = True
+                st.cache_data.clear()
+                status_placeholder.success(
+                    f"分析完成！耗时 {result['stats'].get('elapsed','?')}"
+                )
+                st.rerun()
+            else:
+                status_placeholder.error(f"分析失败：{result['message']}")
+        except Exception as e:
+            st.session_state.pipeline_running = False
+            status_placeholder.error(f"管线异常：{str(e)}")
+
+    if st.session_state.pipeline_done and st.session_state.pipeline_stats:
         s = st.session_state.pipeline_stats.get('stats', {})
-        if st.session_state.pipeline_stats['success']:
-            st.caption(f"Samples: {s.get('n_samples','?')} | CV-F1: {s.get('cv_macro_f1','?')} | AUC: {s.get('macro_auc','?')}")
+        if st.session_state.pipeline_stats.get('success'):
+            st.caption(
+                f"样本数：{s.get('n_samples','?')} | "
+                f"F1分数：{s.get('cv_macro_f1','?')} | "
+                f"AUC：{s.get('macro_auc','?')}"
+            )
 
     st.markdown("---")
 
-    # 筛选
-    st.markdown("### Filters")
+    # ---------- 第三步：筛选查看 ----------
+    st.markdown("### 第三步：筛选查看")
 
     @st.cache_data(ttl=30)
     def _get_filter_options():
@@ -239,24 +259,26 @@ with st.sidebar:
         return v, p
 
     varieties, pests = _get_filter_options()
-    selected_variety = st.selectbox("Variety", varieties, label_visibility="collapsed")
-    selected_pest = st.selectbox("Pest Type", pests, label_visibility="collapsed")
+    selected_variety = st.selectbox("果树品种", varieties, label_visibility="collapsed")
+    selected_pest = st.selectbox("病虫害类型", pests, label_visibility="collapsed")
     risk_filter = st.multiselect(
-        "Risk Level",
+        "风险等级",
         ["低风险", "中风险", "高风险"],
         default=["低风险", "中风险", "高风险"],
         label_visibility="collapsed"
     )
 
     st.markdown("---")
-    st.markdown("### System Info")
+
+    # ---------- 系统信息 ----------
+    st.markdown("### 系统信息")
     df_chk = load_main_dataset()
-    st.caption(f"Total plots: {len(df_chk)}")
+    st.caption(f"地块总数：{len(df_chk)}")
     if "预测风险标签" in df_chk.columns:
         rc = df_chk["预测风险标签"].value_counts()
         for lvl in ["低", "中", "高"]:
-            st.caption(f"Risk {lvl}: {rc.get(lvl, 0)}")
-    st.caption(f"Updated: {datetime.datetime.now().strftime('%H:%M:%S')}")
+            st.caption(f"{lvl}风险：{rc.get(lvl, 0)} 块")
+    st.caption(f"更新时间：{datetime.datetime.now().strftime('%H:%M:%S')}")
 
 
 # ==================== 主内容区 ====================
@@ -271,28 +293,30 @@ st.markdown(f"""
 
 # 状态栏
 current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-data_label = "Uploaded" if st.session_state.current_data_source == "uploaded" else "Default"
+source_label = "上传数据" if st.session_state.using_uploaded else "示例数据"
 
 df_main = load_main_dataset()
 if df_main.empty:
-    st.warning("No data found. Please click **Run Pipeline** in the sidebar to generate data, or upload a new dataset.")
+    st.warning("暂无数据，请先在左侧面板上传数据并点击「开始分析」按钮。")
     st.markdown("""
-    ### Quick Start
-    1. Choose a data source from the sidebar
-    2. Click **Run Pipeline** to process
-    3. Explore interactive visualizations
+    ### 操作指引
+    1. **选择数据源**：可以使用内置示例，或上传您自己的 CSV 数据集
+    2. **点击「开始分析」**：系统将自动运行数据处理管线（预处理 → 建模 → 防控方案）
+    3. **查看可视化结果**：分析完成后即可查看完整的风险预警看板
     """)
     st.stop()
 
+# 如果刚完成管线，清缓存后需要 rerun 已处理；如果没有则正常展示
+pipeline_ok = (st.session_state.pipeline_done and
+               st.session_state.pipeline_stats and
+               st.session_state.pipeline_stats.get('success'))
+
 st.markdown(f"""
 <div class="status-bar">
-    <span><span class="status-indicator"></span> System Active</span>
-    <span class="status-sep">|</span>
-    <span>Time: {current_time}</span>
-    <span class="status-sep">|</span>
-    <span>Source: {data_label}</span>
-    <span class="status-sep">|</span>
-    <span>Plots: {len(df_main)}</span>
+    <span><span class="status-dot"></span> 系统运行中</span>
+    <span>时间：{current_time}</span>
+    <span>数据源：{source_label}</span>
+    <span>地块数：{len(df_main)}</span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -318,7 +342,8 @@ if "风险等级编码" in df_filtered.columns:
     risk_col = "风险等级编码"
     risk_label_col = "预测风险标签" if "预测风险标签" in df_filtered.columns else None
 elif "预测风险标签" in df_filtered.columns:
-    df_filtered["_rc"] = df_filtered["预测风险标签"].map(lambda x: {"低": 0, "中": 1, "高": 2}.get(str(x), -1))
+    df_filtered["_rc"] = df_filtered["预测风险标签"].map(
+        lambda x: {"低": 0, "中": 1, "高": 2}.get(str(x), -1))
     risk_col = "_rc"
     risk_label_col = "预测风险标签"
 else:
@@ -346,36 +371,36 @@ else:
 st.markdown(f"""
 <div class="kpi-grid">
     <div class="kpi-card">
-        <div class="kpi-value kpi-accent-low">{low_count}</div>
-        <div class="kpi-label">Low Risk</div>
-        <div class="kpi-sub">{low_count/max(total,1)*100:.1f}% of total</div>
+        <div class="kpi-value" style="color:#2ecc71;">{low_count}</div>
+        <div class="kpi-label">低风险地块</div>
+        <div class="kpi-sub">占比 {low_count/max(total,1)*100:.1f}%</div>
     </div>
     <div class="kpi-card">
-        <div class="kpi-value kpi-accent-mid">{mid_count}</div>
-        <div class="kpi-label">Medium Risk</div>
-        <div class="kpi-sub">{mid_count/max(total,1)*100:.1f}% of total</div>
+        <div class="kpi-value" style="color:#f39c12;">{mid_count}</div>
+        <div class="kpi-label">中风险地块</div>
+        <div class="kpi-sub">占比 {mid_count/max(total,1)*100:.1f}%</div>
     </div>
     <div class="kpi-card">
-        <div class="kpi-value kpi-accent-high">{high_count}</div>
-        <div class="kpi-label">High Risk</div>
-        <div class="kpi-sub">{high_count/max(total,1)*100:.1f}% of total</div>
+        <div class="kpi-value" style="color:#e74c3c;">{high_count}</div>
+        <div class="kpi-label">高风险地块</div>
+        <div class="kpi-sub">占比 {high_count/max(total,1)*100:.1f}%</div>
     </div>
     <div class="kpi-card">
-        <div class="kpi-value kpi-accent-primary">{total}</div>
-        <div class="kpi-label">Total Plots</div>
-        <div class="kpi-sub">After filtering</div>
+        <div class="kpi-value" style="color:#3498db;">{total}</div>
+        <div class="kpi-label">筛选后地块总数</div>
+        <div class="kpi-sub">当前筛选条件</div>
     </div>
     <div class="kpi-card">
-        <div class="kpi-value kpi-accent-secondary">{window_count}</div>
-        <div class="kpi-label">Prevention Window</div>
-        <div class="kpi-sub">Requires action</div>
+        <div class="kpi-value" style="color:#9b59b6;">{window_count}</div>
+        <div class="kpi-label">防治窗口内地块</div>
+        <div class="kpi-sub">需要立即处置</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ==================== 模块1: 风险态势总览 ====================
-st.markdown('<div class="section-title">Risk Overview</div>', unsafe_allow_html=True)
+# ==================== 模块1：风险态势总览 ====================
+st.markdown('<div class="section-title">一、全园风险态势总览</div>', unsafe_allow_html=True)
 
 c1, c2 = st.columns(2)
 with c1:
@@ -386,8 +411,8 @@ with c2:
     st.plotly_chart(bar_fig, width="stretch")
 
 
-# ==================== 模块2: 空间风险分布 ====================
-st.markdown('<div class="section-title">Spatial Risk Distribution</div>', unsafe_allow_html=True)
+# ==================== 模块2：空间风险分布 ====================
+st.markdown('<div class="section-title">二、果园分区域风险空间分布</div>', unsafe_allow_html=True)
 
 m1, m2 = st.columns([2, 1])
 with m1:
@@ -396,34 +421,34 @@ with m1:
 with m2:
     st.markdown("""
     <div class="legend-box">
-        <div style="font-weight:700;color:#1a1f36;margin-bottom:10px;">Risk Legend</div>
+        <div style="font-weight:700;color:#1a1f36;margin-bottom:10px;">风险等级图例</div>
         <div class="legend-item">
             <div class="legend-dot" style="background:#2ecc71;"></div>
-            <span>Low Risk &mdash; Routine monitoring</span>
+            <span>低风险 — 常规监测，无需施药</span>
         </div>
         <div class="legend-item">
             <div class="legend-dot" style="background:#f39c12;"></div>
-            <span>Medium Risk &mdash; Preventive spray</span>
+            <span>中风险 — 预防施药，加强巡检</span>
         </div>
         <div class="legend-item">
             <div class="legend-dot" style="background:#e74c3c;"></div>
-            <span>High Risk &mdash; Emergency response</span>
+            <span>高风险 — 应急响应，立即处置</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     if "果树品种" in df_filtered.columns and risk_col:
-        st.markdown("#### Variety Breakdown")
+        st.markdown("#### 品种风险分布")
         try:
             vb = df_filtered.groupby("果树品种")[risk_col].value_counts().unstack(fill_value=0)
-            vb.columns = [RISK_LABEL_MAP.get(c, f"Lv.{c}") for c in vb.columns]
+            vb.columns = [RISK_LABEL_MAP.get(c, f"等级{c}") for c in vb.columns]
             st.dataframe(vb, width="stretch")
         except Exception:
-            st.caption("Insufficient data")
+            st.caption("数据不足")
 
 
-# ==================== 模块3: 趋势与交叉分析 ====================
-st.markdown('<div class="section-title">Trend &amp; Cross Analysis</div>', unsafe_allow_html=True)
+# ==================== 模块3：趋势与交叉分析 ====================
+st.markdown('<div class="section-title">三、分时段风险趋势与交叉分析</div>', unsafe_allow_html=True)
 
 t1, t2 = st.columns(2)
 with t1:
@@ -433,20 +458,20 @@ with t2:
     heatmap_fig = create_risk_heatmap(df_filtered)
     st.plotly_chart(heatmap_fig, width="stretch")
 
-st.markdown("#### Risk Level x Prevention Window")
+st.markdown("#### 风险等级 x 防治窗口交叉统计")
 if "在防治窗口内" in df_filtered.columns:
     df_filtered["_win"] = df_filtered["在防治窗口内"].apply(
-        lambda x: "In Window" if str(x).lower() in ["true", "1", "是"] else "Outside"
+        lambda x: "窗口内" if str(x).lower() in ["true", "1", "是"] else "窗口外"
     )
     rl = risk_label_col if risk_label_col else risk_col
-    cross = pd.crosstab(df_filtered[rl], df_filtered["_win"], margins=True, margins_name="Total")
+    cross = pd.crosstab(df_filtered[rl], df_filtered["_win"], margins=True, margins_name="合计")
     st.dataframe(cross, width="stretch")
 else:
-    st.caption("Prevention window data not available.")
+    st.caption("当前数据集无防治窗口字段")
 
 
-# ==================== 模块4: 模型性能 ====================
-st.markdown('<div class="section-title">Model Performance</div>', unsafe_allow_html=True)
+# ==================== 模块4：模型性能 ====================
+st.markdown('<div class="section-title">四、模型性能评估</div>', unsafe_allow_html=True)
 
 try:
     kpi_df = load_kpi_metrics()
@@ -457,31 +482,34 @@ try:
     p1, p2, p3 = st.columns(3)
     with p1:
         if not kpi_df.empty:
+            st.markdown("**核心指标**")
             st.dataframe(kpi_df, width="stretch", hide_index=True)
     with p2:
         if not roc_df.empty:
+            st.markdown("**ROC/AUC**")
             st.dataframe(roc_df, width="stretch", hide_index=True)
     with p3:
         if not cm_df.empty:
+            st.markdown("**混淆矩阵**")
             st.dataframe(cm_df, width="stretch")
 
-    st.markdown("#### Feature Importance (LightGBM Gain)")
+    st.markdown("#### 特征重要性（LightGBM Gain）")
     if not feat_df.empty:
         fi_fig = create_feature_importance_chart(feat_df)
         st.plotly_chart(fi_fig, width="stretch")
 
     shap_df = load_shap_contributions()
     if not shap_df.empty:
-        st.markdown("#### SHAP Contribution")
+        st.markdown("#### SHAP 特征贡献分析")
         shap_fig = create_shap_chart(shap_df)
         st.plotly_chart(shap_fig, width="stretch")
 
 except Exception as e:
-    st.info(f"Model performance data unavailable: {e}")
+    st.info(f"模型性能数据加载失败：{e}")
 
 
-# ==================== 模块5: 防控策略 ====================
-st.markdown('<div class="section-title">Prevention Strategy</div>', unsafe_allow_html=True)
+# ==================== 模块5：防控策略 ====================
+st.markdown('<div class="section-title">五、精准防控策略体系</div>', unsafe_allow_html=True)
 
 try:
     rri_df = load_rri_jenks()
@@ -498,15 +526,15 @@ try:
             posi_fig = create_posi_weight_chart(posi_df)
             st.plotly_chart(posi_fig, width="stretch")
 
-    st.markdown("#### Prevention Plans")
+    st.markdown("#### 防控方案推荐列表")
     if not prev_df.empty:
         st.dataframe(prev_df.head(20), width="stretch")
 except Exception as e:
-    st.info(f"Strategy data unavailable: {e}")
+    st.info(f"防控策略数据加载失败：{e}")
 
 
-# ==================== 模块6: 地块详情 ====================
-st.markdown('<div class="section-title">Plot Detail</div>', unsafe_allow_html=True)
+# ==================== 模块6：单地块详情 ====================
+st.markdown('<div class="section-title">六、单地块详情与防控建议</div>', unsafe_allow_html=True)
 
 if "地块ID" not in df_filtered.columns:
     df_filtered["地块ID"] = [f"P{i+1}" for i in range(len(df_filtered))]
@@ -515,46 +543,49 @@ plot_ids = df_filtered["地块ID"].tolist()
 
 f1, f2 = st.columns([1, 3])
 with f1:
-    quick = st.radio("Quick Filter", ["All", "High Risk", "Medium Risk", "Low Risk"],
-                     label_visibility="collapsed")
+    quick = st.radio(
+        "快速筛选",
+        ["全部地块", "仅高风险", "仅中风险", "仅低风险"],
+        label_visibility="collapsed"
+    )
 with f2:
-    if quick == "High Risk" and risk_col:
+    if quick == "仅高风险" and risk_col:
         candidate = df_filtered[df_filtered[risk_col] == 2]["地块ID"].tolist()
-    elif quick == "Medium Risk" and risk_col:
+    elif quick == "仅中风险" and risk_col:
         candidate = df_filtered[df_filtered[risk_col] == 1]["地块ID"].tolist()
-    elif quick == "Low Risk" and risk_col:
+    elif quick == "仅低风险" and risk_col:
         candidate = df_filtered[df_filtered[risk_col] == 0]["地块ID"].tolist()
     else:
         candidate = plot_ids
 
     if candidate:
-        selected_plot = st.selectbox("Select a plot", candidate, label_visibility="collapsed")
+        selected_plot = st.selectbox("选择地块", candidate, label_visibility="collapsed")
         plot_data = df_filtered[df_filtered["地块ID"] == selected_plot]
         if not plot_data.empty:
             row = plot_data.iloc[0]
-            risk_val = row.get("预测风险标签", row.get(risk_col, "N/A"))
+            risk_val = row.get("预测风险标签", row.get(risk_col, "未知"))
             risk_code_val = {"低": 0, "中": 1, "高": 2}.get(str(risk_val), 0)
-            advice = BASE_CONTROL_PLANS.get(risk_code_val, "No specific plan.")
+            advice = BASE_CONTROL_PLANS.get(risk_code_val, "暂无特定方案。")
             css_map = {0: "advice-low", 1: "advice-mid", 2: "advice-high"}
             css_class = css_map.get(risk_code_val, "advice-low")
 
             st.markdown(f"""
             <div class="advice-card {css_class}">
-                <strong>Plot: {selected_plot}</strong> &nbsp;|&nbsp; Risk: {risk_val}<br>
+                <strong>地块：{selected_plot}</strong> &nbsp;|&nbsp; 风险等级：{risk_val}<br>
                 {advice}
             </div>
             """, unsafe_allow_html=True)
 
-            display_cols = [c for c in df_filtered.columns if c not in ['_rc', '_win']
-                            and not c.startswith('_')][:15]
+            display_cols = [c for c in df_filtered.columns
+                            if c not in ['_rc', '_win'] and not c.startswith('_')][:15]
             st.dataframe(plot_data[display_cols], width="stretch")
     else:
-        st.info("No plots match current filters.")
+        st.info("当前筛选条件下没有匹配的地块。")
 
 
 # ==================== 页脚 ====================
 st.markdown(f"""
 <div class="app-footer">
-    Orchard Pest Risk Warning Dashboard &middot; Powered by LightGBM &middot; {datetime.datetime.now().year}
+    果园病虫害风险预警可视化看板 &middot; 基于 LightGBM 智能分析引擎 &middot; {datetime.datetime.now().year}
 </div>
 """, unsafe_allow_html=True)
