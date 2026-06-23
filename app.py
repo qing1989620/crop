@@ -1,35 +1,33 @@
+# -*- coding: utf-8 -*-
 """
 果园病虫害风险预警与防控可视化看板
 =====================================
 基于 LightGBM + SHAP 的智能预警系统
 企业级 Streamlit 可视化大屏
-
-运行方式：
-    streamlit run app.py
-    或双击 run.bat
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
 import time
 import datetime
-import random
 import os
 import sys
+import tempfile
 
-# 将当前目录加入 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from config import (
-    APP_TITLE, APP_LAYOUT, AUTO_REFRESH_INTERVAL, ENABLE_AUTO_REFRESH,
-    RISK_LEVELS, BASE_CONTROL_PLANS, SIMULATION_MODES, DEFAULT_SIMULATION_MODE
+    APP_TITLE, APP_SUBTITLE, APP_LAYOUT, AUTO_REFRESH_INTERVAL,
+    ENABLE_AUTO_REFRESH, RISK_LEVELS, BASE_CONTROL_PLANS,
+    OUTPUT_DIR, DEFAULT_DATA_PATH, CHART_COLORS, RISK_LABEL_MAP, RISK_LABEL_REVERSE
 )
 from utils.data_loader import (
     load_main_dataset, load_prevention_plan, load_response_zone_summary,
     load_three_tier_summary, load_strategy_system, load_risk_window_cross,
     load_feature_importance, load_shap_contributions, load_kpi_metrics,
     load_confusion_matrix, load_roc_auc, load_category_distribution,
-    load_posi_weights, get_time_based_plan, get_risk_color_map
+    load_posi_weights, get_risk_color_map, load_rri_jenks
 )
 from utils.charts import (
     create_risk_pie_chart, create_risk_bar_chart, create_spatial_risk_map,
@@ -38,793 +36,525 @@ from utils.charts import (
     create_posi_weight_chart, create_risk_heatmap
 )
 
+
 # ==================== 页面基础配置 ====================
 st.set_page_config(
-    page_title="果园病虫害预警看板",
-    page_icon="🍎",
+    page_title=APP_TITLE,
+    page_icon="",
     layout=APP_LAYOUT,
     initial_sidebar_state="expanded"
 )
 
-# ==================== 自定义 CSS 样式 ====================
+# ==================== 专业 CSS 样式 ====================
 st.markdown("""
 <style>
     html, body, [class*="css"] {
-        font-family: 'Microsoft YaHei', 'SimHei', sans-serif;
+        font-family: 'Microsoft YaHei', 'Segoe UI', -apple-system, sans-serif;
     }
-    
-    .main-title {
-        font-size: 2.2rem;
-        font-weight: 700;
-        text-align: center;
-        color: #2c3e50;
-        padding: 10px 0;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
+
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1f36 0%, #1e2640 100%);
     }
-    
+    [data-testid="stSidebar"] * { color: #e0e4ec !important; }
+    [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+        color: #ffffff !important; font-weight: 600; letter-spacing: 0.5px;
+    }
+    [data-testid="stSidebar"] button {
+        background: #2e3a5c !important; color: #fff !important;
+        border: 1px solid #3d4f7c !important; border-radius: 6px !important;
+    }
+    [data-testid="stSidebar"] button:hover {
+        background: #3d4f7c !important; border-color: #5a6fa8 !important;
+    }
+    [data-testid="stSidebar"] hr { border-color: #2e3a5c !important; }
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+        color: #8e9bb4 !important; font-size: 0.85rem;
+    }
+
+    .app-header {
+        padding: 6px 0 10px 0;
+        border-bottom: 1px solid #e8ecf1; margin-bottom: 18px;
+    }
+    .app-title {
+        font-size: 1.6rem; font-weight: 700; color: #1a1f36; letter-spacing: 1px;
+    }
+    .app-subtitle {
+        font-size: 0.85rem; color: #7f8c8d; font-weight: 400; margin-top: 2px;
+    }
+
     .status-bar {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        gap: 20px;
-        padding: 8px;
-        background: #f8f9fa;
-        border-radius: 8px;
-        margin: 5px 0 15px 0;
+        display: flex; align-items: center; gap: 18px;
+        padding: 8px 16px; background: #f5f7fa; border-radius: 8px;
+        margin-bottom: 16px; font-size: 0.82rem; color: #546e7a;
     }
-    
-    .status-dot {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #2ecc71;
-        animation: pulse 2s infinite;
+    .status-indicator {
+        display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+        background: #2ecc71; margin-right: 6px;
+        box-shadow: 0 0 6px rgba(46,204,113,0.4);
     }
-    
-    @keyframes pulse {
-        0% { opacity: 1; }
-        50% { opacity: 0.3; }
-        100% { opacity: 1; }
+    .status-sep { color: #cfd8dc; }
+
+    .kpi-grid {
+        display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;
+        margin: 10px 0 20px 0;
     }
-    
-    .metric-card {
-        padding: 20px;
-        border-radius: 12px;
-        text-align: center;
-        color: white;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        transition: transform 0.3s;
+    .kpi-card {
+        background: #ffffff; border-radius: 10px; padding: 18px 16px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.06); border: 1px solid #eef0f4;
+        transition: box-shadow 0.2s, transform 0.2s;
     }
-    
-    .metric-card:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+    .kpi-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); transform: translateY(-2px); }
+    .kpi-value { font-size: 2rem; font-weight: 700; line-height: 1.2; }
+    .kpi-label { font-size: 0.8rem; color: #7f8c8d; margin-top: 4px; font-weight: 500; }
+    .kpi-sub { font-size: 0.72rem; color: #b0bec5; margin-top: 2px; }
+    .kpi-accent-low { color: #2ecc71; }
+    .kpi-accent-mid { color: #f39c12; }
+    .kpi-accent-high { color: #e74c3c; }
+    .kpi-accent-primary { color: #3498db; }
+    .kpi-accent-secondary { color: #9b59b6; }
+
+    .section-title {
+        font-size: 1.15rem; font-weight: 700; color: #1a1f36;
+        margin: 28px 0 12px 0; padding-bottom: 8px;
+        border-bottom: 2px solid #3498db; display: inline-block; letter-spacing: 0.5px;
     }
-    
-    .metric-value {
-        font-size: 2.5rem;
-        font-weight: 700;
+
+    .advice-card {
+        padding: 14px 18px; border-radius: 8px; border-left: 4px solid;
+        margin: 8px 0; font-size: 0.88rem; line-height: 1.6;
     }
-    
-    .metric-label {
-        font-size: 0.95rem;
-        opacity: 0.9;
-        margin-top: 5px;
+    .advice-low { background: #eafaf1; border-color: #2ecc71; color: #1a5c2e; }
+    .advice-mid { background: #fef9e7; border-color: #f39c12; color: #7d5e0a; }
+    .advice-high { background: #fdedec; border-color: #e74c3c; color: #7b241c; }
+
+    .legend-box {
+        background: #fff; border: 1px solid #eef0f4; border-radius: 8px;
+        padding: 14px 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
-    
-    .metric-delta {
-        font-size: 0.8rem;
-        opacity: 0.8;
-        margin-top: 3px;
+    .legend-item {
+        display: flex; align-items: center; margin: 6px 0;
+        font-size: 0.85rem; color: #546e7a;
     }
-    
-    .custom-divider {
-        border: none;
-        height: 2px;
-        background: linear-gradient(90deg, transparent, #bdc3c7, transparent);
-        margin: 20px 0;
+    .legend-dot {
+        width: 12px; height: 12px; border-radius: 3px;
+        margin-right: 10px; flex-shrink: 0;
     }
-    
-    .advice-box-low {
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 5px solid #2ecc71;
-        background: #eafaf1;
-        margin: 10px 0;
+
+    .app-footer {
+        text-align: center; padding: 20px; color: #bdc3c7;
+        font-size: 0.75rem; border-top: 1px solid #ecf0f1; margin-top: 40px;
     }
-    
-    .advice-box-mid {
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 5px solid #f39c12;
-        background: #fef9e7;
-        margin: 10px 0;
-    }
-    
-    .advice-box-high {
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 5px solid #e74c3c;
-        background: #fdedec;
-        margin: 10px 0;
-    }
-    
-    .footer {
-        text-align: center;
-        padding: 20px;
-        color: #bdc3c7;
-        font-size: 0.8rem;
-        border-top: 1px solid #ecf0f1;
-        margin-top: 30px;
-    }
-    
+
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== 自动刷新机制 ====================
-if ENABLE_AUTO_REFRESH:
-    st.markdown(
-        f"""
-        <script>
-        setTimeout(function() {{
-            window.location.reload();
-        }}, {AUTO_REFRESH_INTERVAL * 1000});
-        </script>
-        """,
-        unsafe_allow_html=True
-    )
 
-# ==================== 加载数据 ====================
-@st.cache_data(ttl=30)
-def load_all_data():
-    """统一加载所有数据"""
-    data = {}
-    with st.spinner("正在加载数据..."):
-        try:
-            data["main"] = load_main_dataset()
-            data["prevention"] = load_prevention_plan()
-            data["response_zone"] = load_response_zone_summary()
-            data["three_tier"] = load_three_tier_summary()
-            data["strategy"] = load_strategy_system()
-            data["risk_window"] = load_risk_window_cross()
-            data["feature_importance"] = load_feature_importance()
-            data["shap"] = load_shap_contributions()
-            data["kpi"] = load_kpi_metrics()
-            data["confusion"] = load_confusion_matrix()
-            data["roc_auc"] = load_roc_auc()
-            data["category_dist"] = load_category_distribution()
-            data["posi_weights"] = load_posi_weights()
-        except Exception as e:
-            st.error(f"数据加载异常: {e}")
-    return data
-
-
-data = load_all_data()
-
-# 获取主数据集
-df_main = data.get("main", pd.DataFrame())
-if df_main.empty:
-    st.error("无法加载核心数据，请检查数据文件路径。")
-    st.stop()
-
-# ==================== 模拟实时数据扰动 ====================
-def apply_simulation_perturbation(df: pd.DataFrame) -> pd.DataFrame:
-    """对数据集施加随机扰动，模拟实时数据变化"""
-    sim_df = df.copy()
-    np.random.seed(int(time.time()))
-    
-    prob_cols = [c for c in sim_df.columns if "风险概率" in c and "等级" in c]
-    for col in prob_cols:
-        if col in sim_df.columns:
-            noise = np.random.uniform(-0.03, 0.03, len(sim_df))
-            sim_df[col] = sim_df[col] + noise
-            sim_df[col] = sim_df[col].clip(0, 1)
-    
-    if len(prob_cols) == 3:
-        sums = sim_df[prob_cols].sum(axis=1)
-        for col in prob_cols:
-            sim_df[col] = sim_df[col] / sums
-    
-    if len(prob_cols) == 3:
-        sim_df["预测风险编码_sim"] = sim_df[prob_cols].values.argmax(axis=1)
-        sim_df["预测风险标签_sim"] = sim_df["预测风险编码_sim"].map({0: "低", 1: "中", 2: "高"})
-    
-    numeric_cols = sim_df.select_dtypes(include=[np.number]).columns
-    exclude_cols = prob_cols + ["风险等级编码", "预测风险等级"]
-    for col in numeric_cols:
-        if col not in exclude_cols and sim_df[col].dtype in [np.float64, np.float32]:
-            std = sim_df[col].std()
-            if std > 0:
-                noise = np.random.normal(0, std * 0.02, len(sim_df))
-                sim_df[col] = sim_df[col] + noise
-    
-    return sim_df
+# ==================== 会话状态 ====================
+if 'pipeline_ran' not in st.session_state:
+    st.session_state.pipeline_ran = False
+if 'pipeline_stats' not in st.session_state:
+    st.session_state.pipeline_stats = None
+if 'uploaded_file_path' not in st.session_state:
+    st.session_state.uploaded_file_path = None
+if 'current_data_source' not in st.session_state:
+    st.session_state.current_data_source = "default"
 
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
-    st.markdown("## 🍎 看板控制面板")
+    st.markdown("## Dashboard Control")
     st.markdown("---")
-    
-    sim_mode = st.radio(
-        "📡 数据刷新模式",
-        SIMULATION_MODES,
-        index=SIMULATION_MODES.index(DEFAULT_SIMULATION_MODE)
+
+    # 数据源
+    st.markdown("### Data Source")
+    data_source = st.radio(
+        "Select data source",
+        ["Default Sample Data", "Upload New Dataset"],
+        label_visibility="collapsed"
     )
-    
-    st.markdown("---")
-    st.markdown("### 🔍 数据筛选")
-    
-    if "果树品种" in df_main.columns:
-        varieties = ["全部"] + sorted(df_main["果树品种"].unique().tolist())
-        selected_variety = st.selectbox("果树品种", varieties)
+
+    if data_source == "Upload New Dataset":
+        uploaded_file = st.file_uploader(
+            "Upload CSV file",
+            type=["csv"],
+            help="Required columns: 地块ID, 果树品种, 病虫害类型, 风险等级, 平均气温, 相对湿度, 降水量, 日照时数, 土壤湿度, 风速, 近7天病株数, 近7天虫口密度, 近30天用药次数",
+            label_visibility="collapsed"
+        )
+        if uploaded_file is not None:
+            uploads_dir = os.path.join(BASE_DIR, "uploads")
+            os.makedirs(uploads_dir, exist_ok=True)
+            tmp_path = os.path.join(uploads_dir, uploaded_file.name)
+            with open(tmp_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            st.session_state.uploaded_file_path = tmp_path
+            st.session_state.current_data_source = "uploaded"
+            st.success(f"Uploaded: {uploaded_file.name}")
     else:
-        selected_variety = "全部"
-    
+        st.session_state.current_data_source = "default"
+
+    st.markdown("---")
+
+    # 管线
+    st.markdown("### Pipeline")
+
+    if st.session_state.current_data_source == "uploaded" and st.session_state.uploaded_file_path:
+        pipeline_input = st.session_state.uploaded_file_path
+        btn_label = "Run Pipeline (Uploaded Data)"
+        btn_help = f"Process {os.path.basename(pipeline_input)}"
+    else:
+        pipeline_input = DEFAULT_DATA_PATH
+        btn_label = "Run Pipeline (Sample Data)"
+        btn_help = "Process built-in sample data"
+
+    if st.button(btn_label, type="primary", width="stretch", help=btn_help):
+        with st.spinner("Running data pipeline..."):
+            from pipeline import run_pipeline
+            result = run_pipeline(pipeline_input)
+            st.session_state.pipeline_ran = True
+            st.session_state.pipeline_stats = result
+            if result['success']:
+                st.success(f"Pipeline completed ({result['stats'].get('elapsed', 'N/A')})")
+                st.cache_data.clear()
+            else:
+                st.error(f"Pipeline failed: {result['message']}")
+
+    if st.session_state.pipeline_ran and st.session_state.pipeline_stats:
+        s = st.session_state.pipeline_stats.get('stats', {})
+        if st.session_state.pipeline_stats['success']:
+            st.caption(f"Samples: {s.get('n_samples','?')} | CV-F1: {s.get('cv_macro_f1','?')} | AUC: {s.get('macro_auc','?')}")
+
+    st.markdown("---")
+
+    # 筛选
+    st.markdown("### Filters")
+
+    @st.cache_data(ttl=30)
+    def _get_filter_options():
+        df = load_main_dataset()
+        v = ["全部"] + sorted(df["果树品种"].unique().tolist()) if "果树品种" in df.columns else ["全部"]
+        p = ["全部"] + sorted(df["病虫害类型"].unique().astype(str).tolist()) if "病虫害类型" in df.columns else ["全部"]
+        return v, p
+
+    varieties, pests = _get_filter_options()
+    selected_variety = st.selectbox("Variety", varieties, label_visibility="collapsed")
+    selected_pest = st.selectbox("Pest Type", pests, label_visibility="collapsed")
     risk_filter = st.multiselect(
-        "风险等级",
+        "Risk Level",
         ["低风险", "中风险", "高风险"],
-        default=["低风险", "中风险", "高风险"]
+        default=["低风险", "中风险", "高风险"],
+        label_visibility="collapsed"
     )
-    
-    if "病虫害类型" in df_main.columns:
-        pest_types = ["全部"] + sorted(df_main["病虫害类型"].unique().astype(str).tolist())
-        selected_pest = st.selectbox("病虫害类型", pest_types)
-    else:
-        selected_pest = "全部"
-    
+
     st.markdown("---")
-    st.markdown("### ⚙️ 刷新设置")
-    refresh_on = st.toggle("启用自动刷新", value=ENABLE_AUTO_REFRESH)
-    if refresh_on:
-        refresh_interval = st.slider("刷新间隔（秒）", 3, 30, AUTO_REFRESH_INTERVAL)
-        st.caption(f"当前：每 {refresh_interval} 秒刷新一次")
-    
-    st.markdown("---")
-    st.markdown("### ℹ️ 系统信息")
-    st.caption(f"数据地块总数：{len(df_main)}")
-    
-    if "预测风险标签" in df_main.columns:
-        risk_counts_sidebar = df_main["预测风险标签"].value_counts()
-        for label in ["低", "中", "高"]:
-            cnt = risk_counts_sidebar.get(label, 0)
-            emoji = {"低": "🟢", "中": "🟡", "高": "🔴"}.get(label, "")
-            st.caption(f"{emoji} {label}风险：{cnt} 块")
-    
-    st.caption(f"页面加载时间：{datetime.datetime.now().strftime('%H:%M:%S')}")
+    st.markdown("### System Info")
+    df_chk = load_main_dataset()
+    st.caption(f"Total plots: {len(df_chk)}")
+    if "预测风险标签" in df_chk.columns:
+        rc = df_chk["预测风险标签"].value_counts()
+        for lvl in ["低", "中", "高"]:
+            st.caption(f"Risk {lvl}: {rc.get(lvl, 0)}")
+    st.caption(f"Updated: {datetime.datetime.now().strftime('%H:%M:%S')}")
 
 
-# ==================== 应用筛选 ====================
+# ==================== 主内容区 ====================
+
+# 头部
+st.markdown(f"""
+<div class="app-header">
+    <div class="app-title">{APP_TITLE}</div>
+    <div class="app-subtitle">{APP_SUBTITLE}</div>
+</div>
+""", unsafe_allow_html=True)
+
+# 状态栏
+current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+data_label = "Uploaded" if st.session_state.current_data_source == "uploaded" else "Default"
+
+df_main = load_main_dataset()
+if df_main.empty:
+    st.warning("No data found. Please click **Run Pipeline** in the sidebar to generate data, or upload a new dataset.")
+    st.markdown("""
+    ### Quick Start
+    1. Choose a data source from the sidebar
+    2. Click **Run Pipeline** to process
+    3. Explore interactive visualizations
+    """)
+    st.stop()
+
+st.markdown(f"""
+<div class="status-bar">
+    <span><span class="status-indicator"></span> System Active</span>
+    <span class="status-sep">|</span>
+    <span>Time: {current_time}</span>
+    <span class="status-sep">|</span>
+    <span>Source: {data_label}</span>
+    <span class="status-sep">|</span>
+    <span>Plots: {len(df_main)}</span>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ==================== 数据筛选 ====================
 df_filtered = df_main.copy()
 
-if sim_mode == "模拟实时（随机扰动）":
-    df_filtered = apply_simulation_perturbation(df_filtered)
-    if "预测风险标签_sim" in df_filtered.columns:
-        df_filtered["预测风险标签"] = df_filtered["预测风险标签_sim"]
-    if "预测风险编码_sim" in df_filtered.columns:
-        df_filtered["风险等级编码"] = df_filtered["预测风险编码_sim"]
-elif sim_mode == "模拟实时（时段循环）":
-    hour = datetime.datetime.now().hour
-    cycle_seed = hour % 4
-    np.random.seed(cycle_seed)
-    df_filtered = apply_simulation_perturbation(df_filtered)
-    if "预测风险标签_sim" in df_filtered.columns:
-        df_filtered["预测风险标签"] = df_filtered["预测风险标签_sim"]
-    if "预测风险编码_sim" in df_filtered.columns:
-        df_filtered["风险等级编码"] = df_filtered["预测风险编码_sim"]
-
+risk_code_map = {"低风险": 0, "中风险": 1, "高风险": 2, "低": 0, "中": 1, "高": 2}
 if selected_variety != "全部" and "果树品种" in df_filtered.columns:
     df_filtered = df_filtered[df_filtered["果树品种"] == selected_variety]
+if selected_pest != "全部" and "病虫害类型" in df_filtered.columns:
+    df_filtered = df_filtered[df_filtered["病虫害类型"].astype(str) == selected_pest]
 
-risk_code_map = {"低风险": 0, "中风险": 1, "高风险": 2, "低": 0, "中": 1, "高": 2}
 if "风险等级编码" in df_filtered.columns:
-    allowed_codes = [risk_code_map.get(r, r) for r in risk_filter]
-    df_filtered = df_filtered[df_filtered["风险等级编码"].isin(allowed_codes)]
+    allowed = [risk_code_map.get(r, r) for r in risk_filter]
+    df_filtered = df_filtered[df_filtered["风险等级编码"].isin(allowed)]
 elif "预测风险标签" in df_filtered.columns:
     allowed_labels = [r.replace("风险", "") for r in risk_filter]
     df_filtered = df_filtered[df_filtered["预测风险标签"].isin(allowed_labels)]
 
-if selected_pest != "全部" and "病虫害类型" in df_filtered.columns:
-    df_filtered = df_filtered[df_filtered["病虫害类型"].astype(str) == selected_pest]
-
-
-# ==================== 生成风险统计 ====================
+# 风险统计
 if "风险等级编码" in df_filtered.columns:
     risk_col = "风险等级编码"
     risk_label_col = "预测风险标签" if "预测风险标签" in df_filtered.columns else None
 elif "预测风险标签" in df_filtered.columns:
-    df_filtered["_risk_code"] = df_filtered["预测风险标签"].map(
-        lambda x: {"低": 0, "中": 1, "高": 2}.get(str(x), -1)
-    )
-    risk_col = "_risk_code"
+    df_filtered["_rc"] = df_filtered["预测风险标签"].map(lambda x: {"低": 0, "中": 1, "高": 2}.get(str(x), -1))
+    risk_col = "_rc"
     risk_label_col = "预测风险标签"
 else:
     risk_col = None
     risk_label_col = None
 
 if risk_col:
-    risk_counts = df_filtered[risk_col].value_counts().to_dict()
-    low_count = risk_counts.get(0, 0)
-    mid_count = risk_counts.get(1, 0)
-    high_count = risk_counts.get(2, 0)
+    rc = df_filtered[risk_col].value_counts().to_dict()
+    low_count = rc.get(0, 0)
+    mid_count = rc.get(1, 0)
+    high_count = rc.get(2, 0)
 else:
     low_count = mid_count = high_count = 0
 
+total = len(df_filtered)
 
-# ==================== 头部标题区 ====================
-st.markdown(f'<div class="main-title">{APP_TITLE}</div>', unsafe_allow_html=True)
+if "在防治窗口内" in df_filtered.columns:
+    wc = df_filtered["在防治窗口内"]
+    window_count = int((wc == True).sum() + (wc == "True").sum() + (wc == 1).sum())
+else:
+    window_count = high_count
 
-current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-status_label = "🟢 系统运行中" if not df_main.empty else "🔴 数据异常"
+
+# ==================== KPI 指标卡 ====================
 st.markdown(f"""
-<div class="status-bar">
-    <span><span class="status-dot"></span> {status_label}</span>
-    <span>|</span>
-    <span>🕐 当前时间：{current_time}</span>
-    <span>|</span>
-    <span>📡 刷新模式：{sim_mode}</span>
-    <span>|</span>
-    <span>📊 筛选地块：{len(df_filtered)} / {len(df_main)}</span>
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-value kpi-accent-low">{low_count}</div>
+        <div class="kpi-label">Low Risk</div>
+        <div class="kpi-sub">{low_count/max(total,1)*100:.1f}% of total</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value kpi-accent-mid">{mid_count}</div>
+        <div class="kpi-label">Medium Risk</div>
+        <div class="kpi-sub">{mid_count/max(total,1)*100:.1f}% of total</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value kpi-accent-high">{high_count}</div>
+        <div class="kpi-label">High Risk</div>
+        <div class="kpi-sub">{high_count/max(total,1)*100:.1f}% of total</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value kpi-accent-primary">{total}</div>
+        <div class="kpi-label">Total Plots</div>
+        <div class="kpi-sub">After filtering</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value kpi-accent-secondary">{window_count}</div>
+        <div class="kpi-label">Prevention Window</div>
+        <div class="kpi-sub">Requires action</div>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
 
+# ==================== 模块1: 风险态势总览 ====================
+st.markdown('<div class="section-title">Risk Overview</div>', unsafe_allow_html=True)
 
-# ==================== 模块1：全园风险总览 ====================
-st.markdown("## 📊 一、全园风险态势总览")
-
-col1, col2, col3, col4, col5 = st.columns(5)
-
-with col1:
-    st.markdown(f"""
-    <div class="metric-card" style="background: linear-gradient(135deg, #2ecc71, #27ae60);">
-        <div class="metric-value">{low_count}</div>
-        <div class="metric-label">🟢 低风险地块</div>
-        <div class="metric-delta">占比 {low_count/len(df_filtered)*100:.1f}%</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown(f"""
-    <div class="metric-card" style="background: linear-gradient(135deg, #f39c12, #e67e22);">
-        <div class="metric-value">{mid_count}</div>
-        <div class="metric-label">🟡 中风险地块</div>
-        <div class="metric-delta">占比 {mid_count/len(df_filtered)*100:.1f}%</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown(f"""
-    <div class="metric-card" style="background: linear-gradient(135deg, #e74c3c, #c0392b);">
-        <div class="metric-value">{high_count}</div>
-        <div class="metric-label">🔴 高风险地块</div>
-        <div class="metric-delta">占比 {high_count/len(df_filtered)*100:.1f}%</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col4:
-    total = len(df_filtered)
-    st.markdown(f"""
-    <div class="metric-card" style="background: linear-gradient(135deg, #3498db, #2980b9);">
-        <div class="metric-value">{total}</div>
-        <div class="metric-label">📋 总地块数</div>
-        <div class="metric-delta">筛选后</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col5:
-    if "在防治窗口内" in df_filtered.columns:
-        window_count = df_filtered["在防治窗口内"].sum() if df_filtered["在防治窗口内"].dtype == bool else \
-                       (df_filtered["在防治窗口内"] == True).sum() + (df_filtered["在防治窗口内"] == "True").sum()
-    else:
-        window_count = high_count
-    st.markdown(f"""
-    <div class="metric-card" style="background: linear-gradient(135deg, #9b59b6, #8e44ad);">
-        <div class="metric-value">{window_count}</div>
-        <div class="metric-label">🎯 防治窗口内</div>
-        <div class="metric-delta">需立即处置</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-chart_col1, chart_col2 = st.columns(2)
-with chart_col1:
+c1, c2 = st.columns(2)
+with c1:
     pie_fig = create_risk_pie_chart(df_filtered)
-    st.plotly_chart(pie_fig, width='stretch')
-with chart_col2:
+    st.plotly_chart(pie_fig, width="stretch")
+with c2:
     bar_fig = create_risk_bar_chart(df_filtered)
-    st.plotly_chart(bar_fig, width='stretch')
-
-st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+    st.plotly_chart(bar_fig, width="stretch")
 
 
-# ==================== 模块2：果园空间风险分布图 ====================
-st.markdown("## 🗺️ 二、果园分区域风险空间分布")
+# ==================== 模块2: 空间风险分布 ====================
+st.markdown('<div class="section-title">Spatial Risk Distribution</div>', unsafe_allow_html=True)
 
-map_col1, map_col2 = st.columns([2, 1])
-
-with map_col1:
+m1, m2 = st.columns([2, 1])
+with m1:
     map_fig = create_spatial_risk_map(df_filtered)
-    st.plotly_chart(map_fig, width='stretch')
-
-with map_col2:
-    st.markdown("### 📋 风险等级图例")
+    st.plotly_chart(map_fig, width="stretch")
+with m2:
     st.markdown("""
-    <div style="padding: 15px; background: white; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
-        <div style="display:flex;align-items:center;margin:8px 0;">
-            <div style="width:20px;height:20px;background:#2ecc71;border-radius:4px;margin-right:10px;"></div>
-            <span><b>低风险</b> — 常规监测，无需施药</span>
+    <div class="legend-box">
+        <div style="font-weight:700;color:#1a1f36;margin-bottom:10px;">Risk Legend</div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background:#2ecc71;"></div>
+            <span>Low Risk &mdash; Routine monitoring</span>
         </div>
-        <div style="display:flex;align-items:center;margin:8px 0;">
-            <div style="width:20px;height:20px;background:#f39c12;border-radius:4px;margin-right:10px;"></div>
-            <span><b>中风险</b> — 预防施药，加强巡检</span>
+        <div class="legend-item">
+            <div class="legend-dot" style="background:#f39c12;"></div>
+            <span>Medium Risk &mdash; Preventive spray</span>
         </div>
-        <div style="display:flex;align-items:center;margin:8px 0;">
-            <div style="width:20px;height:20px;background:#e74c3c;border-radius:4px;margin-right:10px;"></div>
-            <span><b>高风险</b> — 应急响应，立即处置</span>
+        <div class="legend-item">
+            <div class="legend-dot" style="background:#e74c3c;"></div>
+            <span>High Risk &mdash; Emergency response</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
-    
-    if "果树品种" in df_filtered.columns:
-        st.markdown("### 🌳 品种风险分布")
-        variety_risk = df_filtered.groupby("果树品种")[risk_col].value_counts().unstack(fill_value=0)
-        variety_risk.columns = [f"{RISK_LEVELS.get(c, {}).get('label', c)}" for c in variety_risk.columns]
-        st.dataframe(variety_risk, width='stretch')
 
-st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+    if "果树品种" in df_filtered.columns and risk_col:
+        st.markdown("#### Variety Breakdown")
+        try:
+            vb = df_filtered.groupby("果树品种")[risk_col].value_counts().unstack(fill_value=0)
+            vb.columns = [RISK_LABEL_MAP.get(c, f"Lv.{c}") for c in vb.columns]
+            st.dataframe(vb, width="stretch")
+        except Exception:
+            st.caption("Insufficient data")
 
 
-# ==================== 模块3：分时段风险趋势 + 交叉分析 ====================
-st.markdown("## 📈 三、分时段风险趋势与交叉分析")
+# ==================== 模块3: 趋势与交叉分析 ====================
+st.markdown('<div class="section-title">Trend &amp; Cross Analysis</div>', unsafe_allow_html=True)
 
-trend_col1, trend_col2 = st.columns(2)
-
-with trend_col1:
+t1, t2 = st.columns(2)
+with t1:
     trend_fig = create_time_trend_chart(df_filtered)
-    st.plotly_chart(trend_fig, width='stretch')
-
-with trend_col2:
+    st.plotly_chart(trend_fig, width="stretch")
+with t2:
     heatmap_fig = create_risk_heatmap(df_filtered)
-    st.plotly_chart(heatmap_fig, width='stretch')
+    st.plotly_chart(heatmap_fig, width="stretch")
 
-st.markdown("### 风险等级 × 防治窗口 交叉统计明细")
-risk_window_data = data.get("risk_window", pd.DataFrame())
-if not risk_window_data.empty:
-    st.dataframe(risk_window_data, width='stretch')
-else:
-    if "在防治窗口内" in df_filtered.columns:
-        window_col = "在防治窗口内"
-        df_filtered["_window"] = df_filtered[window_col].apply(
-            lambda x: "窗口内" if str(x).lower() in ["true", "1", "是"] else "窗口外"
-        )
-        cross = pd.crosstab(
-            df_filtered[risk_label_col] if risk_label_col else df_filtered[risk_col],
-            df_filtered["_window"],
-            margins=True, margins_name="合计"
-        )
-    else:
-        cross = pd.DataFrame({"说明": ["该数据集无防治窗口字段"]})
-    st.dataframe(cross, width='stretch')
-
-st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
-
-
-# ==================== 模块4：地块详情 + 智能防控建议 ====================
-st.markdown("## 🎯 四、单地块详情与精准防控建议")
-st.markdown("*核心交互模块：选择地块 → 查看实时特征 → 自动匹配防控方案*")
-
-if "地块ID" in df_filtered.columns:
-    plot_ids = df_filtered["地块ID"].tolist()
-else:
-    plot_ids = [f"地块{i+1}" for i in range(len(df_filtered))]
-    df_filtered["地块ID"] = plot_ids
-
-plot_col1, plot_col2, plot_col3 = st.columns([1, 2, 1])
-with plot_col1:
-    quick_filter = st.radio(
-        "快速筛选",
-        ["全部地块", "仅高风险", "仅中风险", "仅低风险"],
-        horizontal=False
+st.markdown("#### Risk Level x Prevention Window")
+if "在防治窗口内" in df_filtered.columns:
+    df_filtered["_win"] = df_filtered["在防治窗口内"].apply(
+        lambda x: "In Window" if str(x).lower() in ["true", "1", "是"] else "Outside"
     )
-with plot_col2:
-    if quick_filter == "仅高风险":
-        if risk_col:
-            filtered_ids = df_filtered[df_filtered[risk_col] == 2]["地块ID"].tolist()
-        else:
-            filtered_ids = plot_ids
-    elif quick_filter == "仅中风险":
-        if risk_col:
-            filtered_ids = df_filtered[df_filtered[risk_col] == 1]["地块ID"].tolist()
-        else:
-            filtered_ids = plot_ids
-    elif quick_filter == "仅低风险":
-        if risk_col:
-            filtered_ids = df_filtered[df_filtered[risk_col] == 0]["地块ID"].tolist()
-        else:
-            filtered_ids = plot_ids
-    else:
-        filtered_ids = plot_ids
-    
-    if not filtered_ids:
-        st.warning("该筛选条件下无匹配地块")
-        filtered_ids = plot_ids
-    
-    selected_plot = st.selectbox(
-        "📌 选择查询地块",
-        filtered_ids if filtered_ids else plot_ids,
-        help="选择地块后，右侧将自动展示该地块的详细数据和防控建议"
-    )
-with plot_col3:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🎲 随机选择地块", width='stretch'):
-        selected_plot = random.choice(filtered_ids) if filtered_ids else plot_ids[0]
-        st.rerun()
-
-# 获取选中地块数据
-plot_data = df_filtered[df_filtered["地块ID"] == selected_plot]
-if plot_data.empty:
-    st.error(f"未找到地块 {selected_plot} 的数据")
+    rl = risk_label_col if risk_label_col else risk_col
+    cross = pd.crosstab(df_filtered[rl], df_filtered["_win"], margins=True, margins_name="Total")
+    st.dataframe(cross, width="stretch")
 else:
-    plot_row = plot_data.iloc[0]
-    
-    if risk_col and risk_col in plot_row.index:
-        plot_risk = int(plot_row[risk_col])
-    elif "预测风险标签" in plot_row.index:
-        plot_risk = {"低": 0, "中": 1, "高": 2}.get(str(plot_row["预测风险标签"]), 0)
-    else:
-        plot_risk = 0
-    
-    risk_info = RISK_LEVELS.get(plot_risk, RISK_LEVELS[0])
-    
-    detail_col1, detail_col2 = st.columns([1, 1.5])
-    
-    with detail_col1:
-        st.markdown(f"""
-        <div style="padding: 20px; background: white; border-radius: 12px; 
-                    box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-top: 5px solid {risk_info['color']};">
-            <h3 style="margin-top:0;">{risk_info['emoji']} 地块：{selected_plot}</h3>
-            <hr>
-        """, unsafe_allow_html=True)
-        
-        info_items = []
-        for key, label in [
-            ("果树品种", "🌳 果树品种"),
-            ("病虫害类型", "🐛 病虫害类型"),
-            ("预测风险标签", "⚠️ 预测风险等级"),
-            ("最大风险概率", "📊 最大风险概率"),
-            ("在防治窗口内", "🎯 是否在防治窗口"),
-        ]:
-            if key in plot_row.index:
-                val = plot_row[key]
-                if key == "最大风险概率" and pd.notna(val):
-                    val = f"{float(val):.4f}"
-                info_items.append(f"<tr><td style='padding:5px 10px;color:#7f8c8d;'>{label}</td><td style='padding:5px 10px;font-weight:600;'>{val}</td></tr>")
-        
-        st.markdown(f"""
-            <table style="width:100%;">
-                {''.join(info_items)}
-            </table>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        posi_cols = [c for c in plot_row.index if "POSI" in str(c)]
-        if posi_cols:
-            st.markdown("#### 📐 POSI 指标")
-            posi_data = {}
-            for c in posi_cols:
-                if pd.notna(plot_row[c]):
-                    try:
-                        posi_data[c] = float(plot_row[c])
-                    except (ValueError, TypeError):
-                        posi_data[c] = str(plot_row[c])
-            if posi_data:
-                posi_df = pd.DataFrame(list(posi_data.items()), columns=["指标", "值"])
-                st.dataframe(posi_df, width='stretch', hide_index=True)
-    
-    with detail_col2:
-        advice_class = {0: "advice-box-low", 1: "advice-box-mid", 2: "advice-box-high"}
-        advice_class_name = advice_class.get(plot_risk, "advice-box-low")
-        
-        time_plan = get_time_based_plan(plot_risk)
-        
-        st.markdown(f"""
-        <div class="{advice_class_name}">
-            <h3>📋 {risk_info['icon']} 智能防控建议</h3>
-            <p style="font-size:1.1rem;line-height:1.8;">{time_plan}</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        prevention_df = data.get("prevention", pd.DataFrame())
-        if not prevention_df.empty:
-            variety = plot_row.get("果树品种", "")
-            pest = plot_row.get("病虫害类型", "")
-            
-            matched = prevention_df[
-                (prevention_df.iloc[:, 0].astype(str) == str(variety)) &
-                (prevention_df.iloc[:, 1].astype(str) == str(pest))
-            ]
-            
-            if not matched.empty:
-                match_row = matched.iloc[0]
-                st.markdown("#### 💊 推荐用药方案")
-                drug_info = []
-                for key, label in [
-                    ("防控策略", "策略"),
-                    ("推荐剂量(%)", "推荐剂量"),
-                    ("推荐农药轮换", "农药轮换方案"),
-                    ("施药频率", "施药频率"),
-                ]:
-                    if key in match_row.index and pd.notna(match_row[key]):
-                        drug_info.append(f"<tr><td style='padding:5px 10px;color:#7f8c8d;'>{label}</td><td style='padding:5px 10px;font-weight:500;'>{match_row[key]}</td></tr>")
-                
-                st.markdown(f"""
-                <div style="padding:15px;background:white;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.06);margin:10px 0;">
-                    <table style="width:100%;">{''.join(drug_info)}</table>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        st.markdown("#### 🌡️ 环境监测指标")
-        env_cols = [
-            ("平均气温", "℃"), ("相对湿度", "%"), ("降水量", "mm"),
-            ("日照时数", "h"), ("土壤湿度", "%"), ("风速", "m/s"),
-            ("THI_温湿胁迫", ""), ("BTM_生物威胁动量", ""), ("PRI_抗药性预警", ""),
-            ("近7天病株数", "株"), ("近7天虫口密度", ""), ("近30天用药次数", "次"),
-            ("LWI_光水滋养", "")
-        ]
-        
-        env_values = {}
-        for col_name, unit in env_cols:
-            if col_name in plot_row.index and pd.notna(plot_row[col_name]):
-                try:
-                    val = float(plot_row[col_name])
-                    env_values[f"{col_name} ({unit})" if unit else col_name] = round(val, 2)
-                except (ValueError, TypeError):
-                    env_values[col_name] = plot_row[col_name]
-        
-        if env_values:
-            env_df = pd.DataFrame(list(env_values.items()), columns=["指标", "数值"])
-            st.dataframe(env_df, width='stretch', hide_index=True)
-
-st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+    st.caption("Prevention window data not available.")
 
 
-# ==================== 模块5：三级防控策略体系 ====================
-st.markdown("## 🛡️ 五、三级差异化防控策略体系")
+# ==================== 模块4: 模型性能 ====================
+st.markdown('<div class="section-title">Model Performance</div>', unsafe_allow_html=True)
 
-strategy_df = data.get("strategy", pd.DataFrame())
-response_zone_df = data.get("response_zone", pd.DataFrame())
+try:
+    kpi_df = load_kpi_metrics()
+    roc_df = load_roc_auc()
+    cm_df = load_confusion_matrix()
+    feat_df = load_feature_importance()
 
-strat_col1, strat_col2 = st.columns(2)
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        if not kpi_df.empty:
+            st.dataframe(kpi_df, width="stretch", hide_index=True)
+    with p2:
+        if not roc_df.empty:
+            st.dataframe(roc_df, width="stretch", hide_index=True)
+    with p3:
+        if not cm_df.empty:
+            st.dataframe(cm_df, width="stretch")
 
-with strat_col1:
-    if not response_zone_df.empty:
-        zone_fig = create_response_zone_chart(response_zone_df)
-        st.plotly_chart(zone_fig, width='stretch')
-    else:
-        st.info("暂无防控响应区数据")
+    st.markdown("#### Feature Importance (LightGBM Gain)")
+    if not feat_df.empty:
+        fi_fig = create_feature_importance_chart(feat_df)
+        st.plotly_chart(fi_fig, width="stretch")
 
-with strat_col2:
-    if not strategy_df.empty:
-        st.markdown("### 📋 三级防控策略对照表")
-        strategy_display = strategy_df.copy()
-        if "防控维度" in strategy_display.columns:
-            strategy_display = strategy_display.set_index("防控维度").T
-        st.dataframe(strategy_display, width='stretch')
-    else:
-        st.info("暂无防控策略数据")
-
-prevention_df = data.get("prevention", pd.DataFrame())
-if not prevention_df.empty:
-    st.markdown("### 💊 防控单元精准方案推荐")
-    display_cols = [c for c in prevention_df.columns if prevention_df[c].nunique() > 0][:8]
-    st.dataframe(prevention_df[display_cols], width='stretch', height=300)
-
-st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
-
-
-# ==================== 模块6：模型特征与可解释性 ====================
-st.markdown("## 🔬 六、模型特征重要性 & 可解释性分析")
-
-fi_df = data.get("feature_importance", pd.DataFrame())
-shap_df = data.get("shap", pd.DataFrame())
-posi_df = data.get("posi_weights", pd.DataFrame())
-
-explain_col1, explain_col2 = st.columns(2)
-
-with explain_col1:
-    if not fi_df.empty:
-        fi_fig = create_feature_importance_chart(fi_df)
-        st.plotly_chart(fi_fig, width='stretch')
-    else:
-        st.info("暂无特征重要性数据")
-
-with explain_col2:
+    shap_df = load_shap_contributions()
     if not shap_df.empty:
+        st.markdown("#### SHAP Contribution")
         shap_fig = create_shap_chart(shap_df)
-        st.plotly_chart(shap_fig, width='stretch')
-    elif not posi_df.empty:
-        posi_fig = create_posi_weight_chart(posi_df)
-        st.plotly_chart(posi_fig, width='stretch')
+        st.plotly_chart(shap_fig, width="stretch")
+
+except Exception as e:
+    st.info(f"Model performance data unavailable: {e}")
+
+
+# ==================== 模块5: 防控策略 ====================
+st.markdown('<div class="section-title">Prevention Strategy</div>', unsafe_allow_html=True)
+
+try:
+    rri_df = load_rri_jenks()
+    posi_df = load_posi_weights()
+    prev_df = load_prevention_plan()
+
+    s1, s2 = st.columns(2)
+    with s1:
+        if not rri_df.empty:
+            zone_fig = create_response_zone_chart(rri_df)
+            st.plotly_chart(zone_fig, width="stretch")
+    with s2:
+        if not posi_df.empty:
+            posi_fig = create_posi_weight_chart(posi_df)
+            st.plotly_chart(posi_fig, width="stretch")
+
+    st.markdown("#### Prevention Plans")
+    if not prev_df.empty:
+        st.dataframe(prev_df.head(20), width="stretch")
+except Exception as e:
+    st.info(f"Strategy data unavailable: {e}")
+
+
+# ==================== 模块6: 地块详情 ====================
+st.markdown('<div class="section-title">Plot Detail</div>', unsafe_allow_html=True)
+
+if "地块ID" not in df_filtered.columns:
+    df_filtered["地块ID"] = [f"P{i+1}" for i in range(len(df_filtered))]
+
+plot_ids = df_filtered["地块ID"].tolist()
+
+f1, f2 = st.columns([1, 3])
+with f1:
+    quick = st.radio("Quick Filter", ["All", "High Risk", "Medium Risk", "Low Risk"],
+                     label_visibility="collapsed")
+with f2:
+    if quick == "High Risk" and risk_col:
+        candidate = df_filtered[df_filtered[risk_col] == 2]["地块ID"].tolist()
+    elif quick == "Medium Risk" and risk_col:
+        candidate = df_filtered[df_filtered[risk_col] == 1]["地块ID"].tolist()
+    elif quick == "Low Risk" and risk_col:
+        candidate = df_filtered[df_filtered[risk_col] == 0]["地块ID"].tolist()
     else:
-        st.info("暂无SHAP/POSI数据")
+        candidate = plot_ids
 
-if not posi_df.empty:
-    st.markdown("### ⚖️ POSI 环境因子权重")
-    posi_fig = create_posi_weight_chart(posi_df)
-    st.plotly_chart(posi_fig, width='stretch')
+    if candidate:
+        selected_plot = st.selectbox("Select a plot", candidate, label_visibility="collapsed")
+        plot_data = df_filtered[df_filtered["地块ID"] == selected_plot]
+        if not plot_data.empty:
+            row = plot_data.iloc[0]
+            risk_val = row.get("预测风险标签", row.get(risk_col, "N/A"))
+            risk_code_val = {"低": 0, "中": 1, "高": 2}.get(str(risk_val), 0)
+            advice = BASE_CONTROL_PLANS.get(risk_code_val, "No specific plan.")
+            css_map = {0: "advice-low", 1: "advice-mid", 2: "advice-high"}
+            css_class = css_map.get(risk_code_val, "advice-low")
 
-st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="advice-card {css_class}">
+                <strong>Plot: {selected_plot}</strong> &nbsp;|&nbsp; Risk: {risk_val}<br>
+                {advice}
+            </div>
+            """, unsafe_allow_html=True)
 
-
-# ==================== 模块7：模型性能评估面板 ====================
-st.markdown("## 📊 七、模型性能评估面板")
-
-kpi_df = data.get("kpi", pd.DataFrame())
-roc_df = data.get("roc_auc", pd.DataFrame())
-confusion_df = data.get("confusion", pd.DataFrame())
-
-if not kpi_df.empty:
-    macro_row = kpi_df[kpi_df["风险等级"] == "宏平均"] if "风险等级" in kpi_df.columns else None
-    
-    if macro_row is not None and not macro_row.empty:
-        row = macro_row.iloc[0]
-        f1_val = row.get("F1分数", 0.98)
-        recall_val = row.get("召回率", 0.97)
-        precision_val = row.get("精确率", 0.98)
+            display_cols = [c for c in df_filtered.columns if c not in ['_rc', '_win']
+                            and not c.startswith('_')][:15]
+            st.dataframe(plot_data[display_cols], width="stretch")
     else:
-        f1_val = 0.978
-        recall_val = 0.974
-        precision_val = 0.982
-    
-    if not roc_df.empty:
-        auc_row = roc_df[roc_df["风险等级"] == "宏平均"] if "风险等级" in roc_df.columns else None
-        if auc_row is not None and not auc_row.empty:
-            auc_val = auc_row.iloc[0].get("AUC_OOF", 0.9997)
-        else:
-            auc_val = 0.9997
-    else:
-        auc_val = 0.9997
-    
-    gauge_fig = create_kpi_gauge(float(f1_val), float(recall_val), float(precision_val), float(auc_val))
-    st.plotly_chart(gauge_fig, width='stretch')
-
-kpi_col1, kpi_col2 = st.columns(2)
-
-with kpi_col1:
-    if not kpi_df.empty:
-        st.markdown("### 📋 各等级分类报告")
-        st.dataframe(kpi_df, width='stretch', hide_index=True)
-
-with kpi_col2:
-    if not confusion_df.empty:
-        st.markdown("### 🎯 混淆矩阵")
-        st.dataframe(confusion_df, width='stretch', hide_index=True)
-    
-    cat_df = data.get("category_dist", pd.DataFrame())
-    if not cat_df.empty:
-        st.markdown("### 📊 样本分布")
-        st.dataframe(cat_df, width='stretch', hide_index=True)
-
-if not roc_df.empty:
-    st.markdown("### 🎯 ROC-AUC 性能")
-    st.dataframe(roc_df, width='stretch', hide_index=True)
+        st.info("No plots match current filters.")
 
 
 # ==================== 页脚 ====================
-st.markdown('<hr class="custom-divider">', unsafe_allow_html=True)
 st.markdown(f"""
-<div class="footer">
-    <p>🍎 果园病虫害风险预警与防控可视化看板 | 基于 LightGBM + SHAP + POSI 的智能预警系统</p>
-    <p>数据来源：300个地块 · 4种果树品种 · 4类病虫害 · 三级风险等级 · 三级防控响应区</p>
-    <p>页面刷新时间：{current_time} | 模拟实时刷新间隔：{AUTO_REFRESH_INTERVAL}秒</p>
-    <p style="color:#bdc3c7;">© 2026 智慧果园病虫害预警系统 v2.0</p>
+<div class="app-footer">
+    Orchard Pest Risk Warning Dashboard &middot; Powered by LightGBM &middot; {datetime.datetime.now().year}
 </div>
 """, unsafe_allow_html=True)

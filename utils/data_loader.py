@@ -33,16 +33,13 @@ def _read_csv_safe(relative_path: str, **kwargs) -> pd.DataFrame:
     """安全读取CSV，自动处理编码问题"""
     full_path = os.path.join(PROJECT_ROOT, relative_path)
     if not os.path.exists(full_path):
-        st.error(f"文件不存在: {full_path}")
         return pd.DataFrame()
-    # 尝试多种编码
     for enc in ['utf-8-sig', 'utf-8', 'gbk', 'gb2312', 'gb18030']:
         try:
             df = pd.read_csv(full_path, encoding=enc, **kwargs)
             return df
         except (UnicodeDecodeError, Exception):
             continue
-    # 最后尝试默认
     return pd.read_csv(full_path, **kwargs)
 
 
