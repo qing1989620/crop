@@ -157,9 +157,68 @@ for key, default in [
     ('uploaded_path', None),
     ('using_uploaded', False),
     ('pipeline_running', False),
+    ('upload_valid', False),
+    ('upload_errors', []),
+    ('upload_preview', None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+# 数据格式要求
+REQUIRED_COLUMNS = [
+    '地块ID', '果树品种', '病虫害类型', '风险等级',
+    '平均气温', '相对湿度', '降水量', '日照时数', '土壤湿度', '风速',
+    '近7天病株数', '近7天虫口密度', '近30天用药次数'
+]
+
+
+def validate_uploaded_csv(file_path: str) -> tuple:
+    """
+    校验上传的 CSV 是否符合管线所需格式
+    返回: (是否有效, 错误列表, 预览DataFrame)
+    """
+    errors = []
+    df = None
+
+    # 尝试读取
+    for enc in ['utf-8-sig', 'utf-8', 'gbk', 'gb2312', 'gb18030']:
+        try:
+            df = pd.read_csv(file_path, encoding=enc, nrows=5)
+            break
+        except Exception:
+            continue
+
+    if df is None:
+        return False, ["无法读取文件，请确认文件为有效的 CSV 格式（编码：UTF-8 或 GBK）"], None
+
+    # 检查必填列
+    existing = set(df.columns)
+    required = set(REQUIRED_COLUMNS)
+    missing = required - existing
+
+    if missing:
+        errors.append(f"缺少 {len(missing)} 个必填字段：{', '.join(sorted(missing))}")
+
+    # 检查风险等级值域
+    if '风险等级' in existing:
+        valid_levels = {'低', '中', '高'}
+        actual = set(df['风险等级'].dropna().unique())
+        invalid = actual - valid_levels
+        if invalid:
+            errors.append(f"「风险等级」列包含非法值 {invalid}，仅接受：低、中、高")
+
+    # 检查数值列
+    numeric_check_cols = ['平均气温', '相对湿度', '降水量', '日照时数', '土壤湿度', '风速',
+                          '近7天病株数', '近7天虫口密度', '近30天用药次数']
+    for col in numeric_check_cols:
+        if col in existing:
+            try:
+                pd.to_numeric(df[col])
+            except Exception:
+                errors.append(f"「{col}」列包含非数值数据，请检查")
+
+    valid = len(errors) == 0
+    return valid, errors, df.head(3) if df is not None else None
 
 
 # ==================== 侧边栏 ====================
@@ -180,38 +239,67 @@ with st.sidebar:
         uploaded_file = st.file_uploader(
             "选择 CSV 文件上传",
             type=["csv"],
-            help="需含以下列：地块ID, 果树品种, 病虫害类型, 风险等级, 平均气温, 相对湿度, 降水量, 日照时数, 土壤湿度, 风速, 近7天病株数, 近7天虫口密度, 近30天用药次数",
+            help="需含以下必填列：地块ID, 果树品种, 病虫害类型, 风险等级, 平均气温, 相对湿度, 降水量, 日照时数, 土壤湿度, 风速, 近7天病株数, 近7天虫口密度, 近30天用药次数",
             label_visibility="collapsed"
         )
         if uploaded_file is not None:
+            # 存到项目 uploads/ 目录
             uploads_dir = os.path.join(BASE_DIR, "uploads")
             os.makedirs(uploads_dir, exist_ok=True)
             save_path = os.path.join(uploads_dir, uploaded_file.name)
             with open(save_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
+
+            # 校验格式
+            valid, errors, preview = validate_uploaded_csv(save_path)
             st.session_state.uploaded_path = save_path
             st.session_state.using_uploaded = True
+            st.session_state.upload_valid = valid
+            st.session_state.upload_errors = errors
+            st.session_state.upload_preview = preview
             st.session_state.pipeline_done = False
-            st.success(f"文件已上传：{uploaded_file.name}")
-            st.info("请点击下方「开始分析」按钮")
+
+            # 显示存储路径
+            st.caption(f"存储位置：`uploads/{uploaded_file.name}`")
+
+            if valid:
+                st.success(f"格式校验通过 — {uploaded_file.name}")
+                st.info("请点击下方「开始分析」")
+            else:
+                st.error("格式校验未通过，无法执行分析：")
+                for err in errors:
+                    st.warning(f"- {err}")
+
+            # 预览数据
+            if preview is not None:
+                with st.expander("数据预览（前3行）"):
+                    st.dataframe(preview, width="stretch")
     else:
         st.session_state.using_uploaded = False
-        st.caption(f"当前数据：内置示例 (300条)")
+        st.session_state.upload_valid = False
+        st.caption("当前数据：内置示例 (300条)")
 
     st.markdown("---")
 
     # ---------- 第二步：运行分析 ----------
     st.markdown("### 第二步：运行分析")
 
-    # 确定管线输入
     if st.session_state.using_uploaded and st.session_state.uploaded_path:
         pipe_input = st.session_state.uploaded_path
         btn_text = "开始分析（上传数据）"
+        can_run = st.session_state.upload_valid
     else:
         pipe_input = DEFAULT_DATA_PATH
         btn_text = "开始分析（示例数据）"
+        can_run = True
 
-    if st.button(btn_text, type="primary", width="stretch"):
+    if not can_run:
+        st.warning("上传数据格式不符，请修正后重新上传")
+        btn_disabled = True
+    else:
+        btn_disabled = False
+
+    if st.button(btn_text, type="primary", width="stretch", disabled=btn_disabled):
         st.session_state.pipeline_running = True
         st.session_state.pipeline_done = False
 
