@@ -493,10 +493,10 @@ st.markdown('<div class="section-title">一、全园风险态势总览</div>', u
 c1, c2 = st.columns(2)
 with c1:
     pie_fig = create_risk_pie_chart(df_filtered)
-    st.plotly_chart(pie_fig, width="stretch")
+    st.plotly_chart(pie_fig, width="stretch", config={'displayModeBar': False})
 with c2:
     bar_fig = create_risk_bar_chart(df_filtered)
-    st.plotly_chart(bar_fig, width="stretch")
+    st.plotly_chart(bar_fig, width="stretch", config={'displayModeBar': False})
 
 
 # ==================== 模块2：空间风险分布 ====================
@@ -505,7 +505,7 @@ st.markdown('<div class="section-title">二、果园分区域风险空间分布<
 m1, m2 = st.columns([2, 1])
 with m1:
     map_fig = create_spatial_risk_map(df_filtered)
-    st.plotly_chart(map_fig, width="stretch")
+    st.plotly_chart(map_fig, width="stretch", config={'displayModeBar': False})
 with m2:
     st.markdown("""
     <div class="legend-box">
@@ -541,10 +541,10 @@ st.markdown('<div class="section-title">三、分时段风险趋势与交叉分�
 t1, t2 = st.columns(2)
 with t1:
     trend_fig = create_time_trend_chart(df_filtered)
-    st.plotly_chart(trend_fig, width="stretch")
+    st.plotly_chart(trend_fig, width="stretch", config={'displayModeBar': False})
 with t2:
     heatmap_fig = create_risk_heatmap(df_filtered)
-    st.plotly_chart(heatmap_fig, width="stretch")
+    st.plotly_chart(heatmap_fig, width="stretch", config={'displayModeBar': False})
 
 st.markdown("#### 风险等级 x 防治窗口交叉统计")
 if "在防治窗口内" in df_filtered.columns:
@@ -584,13 +584,13 @@ try:
     st.markdown("#### 特征重要性（LightGBM Gain）")
     if not feat_df.empty:
         fi_fig = create_feature_importance_chart(feat_df)
-        st.plotly_chart(fi_fig, width="stretch")
+        st.plotly_chart(fi_fig, width="stretch", config={'displayModeBar': False})
 
     shap_df = load_shap_contributions()
     if not shap_df.empty:
         st.markdown("#### SHAP 特征贡献分析")
         shap_fig = create_shap_chart(shap_df)
-        st.plotly_chart(shap_fig, width="stretch")
+        st.plotly_chart(shap_fig, width="stretch", config={'displayModeBar': False})
 
 except Exception as e:
     st.info(f"模型性能数据加载失败：{e}")
@@ -608,11 +608,11 @@ try:
     with s1:
         if not rri_df.empty:
             zone_fig = create_response_zone_chart(rri_df)
-            st.plotly_chart(zone_fig, width="stretch")
+            st.plotly_chart(zone_fig, width="stretch", config={'displayModeBar': False})
     with s2:
         if not posi_df.empty:
             posi_fig = create_posi_weight_chart(posi_df)
-            st.plotly_chart(posi_fig, width="stretch")
+            st.plotly_chart(posi_fig, width="stretch", config={'displayModeBar': False})
 
     st.markdown("#### 防控方案推荐列表")
     if not prev_df.empty:
