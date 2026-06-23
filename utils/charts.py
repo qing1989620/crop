@@ -193,7 +193,7 @@ def create_spatial_risk_map(df: pd.DataFrame) -> go.Figure:
     )
     
     fig.update_layout(
-        title=dict(text="🍎 果园分区域风险空间分布", font=dict(size=20, family="Microsoft YaHei"), x=0.5),
+        title=dict(text="果园分区域风险空间分布", font=dict(size=20, family="Microsoft YaHei"), x=0.5),
         xaxis=dict(title="经度方向（模拟坐标）", showgrid=True, gridcolor='rgba(200,200,200,0.3)',
                    zeroline=False, showticklabels=False),
         yaxis=dict(title="纬度方向（模拟坐标）", showgrid=True, gridcolor='rgba(200,200,200,0.3)',
@@ -252,7 +252,7 @@ def create_time_trend_chart(df: pd.DataFrame) -> go.Figure:
     
     fig.update_traces(line=dict(width=3), marker=dict(size=10))
     fig.update_layout(
-        title=dict(text="📈 分时段风险变化趋势（模拟）", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
+        title=dict(text="分时段风险变化趋势（模拟）", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
         xaxis_title="时段",
         yaxis_title="风险地块数量（块）",
         legend=dict(title="风险等级", orientation="h", yanchor="bottom", y=-0.2),
@@ -282,7 +282,7 @@ def create_feature_importance_chart(fi_df: pd.DataFrame) -> go.Figure:
     )
     fig.update_traces(textposition='outside', textfont=dict(size=11))
     fig.update_layout(
-        title=dict(text="🔑 LightGBM 特征重要性排序（Gain）", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
+        title=dict(text="LightGBM 特征重要性排序（Gain）", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
         xaxis_title="Gain 重要性",
         yaxis_title="",
         coloraxis_showscale=False,
@@ -330,7 +330,7 @@ def create_shap_chart(shap_df: pd.DataFrame) -> go.Figure:
         )
     
     fig.update_layout(
-        title=dict(text="🔬 SHAP 特征贡献分析（各类别分别贡献）", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
+        title=dict(text="SHAP 特征贡献分析（各类别分别贡献）", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
         xaxis_title="SHAP |mean| 贡献值",
         yaxis_title="",
         legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
@@ -417,7 +417,7 @@ def create_kpi_gauge(f1_score: float, recall: float, precision: float, auc: floa
     ), row=1, col=4)
     
     fig.update_layout(
-        title=dict(text="📊 模型性能核心指标", font=dict(size=20, family="Microsoft YaHei"), x=0.5),
+        title=dict(text="模型性能核心指标", font=dict(size=20, family="Microsoft YaHei"), x=0.5),
         height=350,
         margin=dict(t=60, b=20, l=20, r=20)
     )
@@ -462,7 +462,7 @@ def create_response_zone_chart(df: pd.DataFrame) -> go.Figure:
     )
     
     fig.update_layout(
-        title=dict(text="🛡️ 三级防控响应区分布", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
+        title=dict(text="三级防控响应区分布", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
         height=400,
         margin=dict(t=60, b=30, l=10, r=10),
         showlegend=False
@@ -489,7 +489,7 @@ def create_posi_weight_chart(posi_df: pd.DataFrame) -> go.Figure:
     )
     fig.update_traces(textposition='outside')
     fig.update_layout(
-        title=dict(text="⚖️ POSI 环境因子权重", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
+        title=dict(text="POSI 环境因子权重", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
         xaxis_title="权重值",
         yaxis_title="",
         coloraxis_showscale=False,
@@ -530,7 +530,7 @@ def create_risk_heatmap(df: pd.DataFrame) -> go.Figure:
     ))
     
     fig.update_layout(
-        title=dict(text="🔥 风险等级 × 防治窗口 交叉分布", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
+        title=dict(text="风险等级 x 防治窗口交叉分布", font=dict(size=18, family="Microsoft YaHei"), x=0.5),
         xaxis_title="防治窗口状态",
         yaxis_title="风险等级",
         height=350,
